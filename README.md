@@ -1,6 +1,6 @@
 # urlcheck
 
-A Go-based CLI tool to check the status, response time, and content of URLs. Useful for developers, site owners, and sysadmins to monitor website availability and content integrity.
+A  CLI tool to check the status, response time, and content of URLs. Useful for developers, site owners, and sysadmins to monitor website availability and content integrity.
 
 ## Features
 - Check a single URL (`urlcheck check <url>`).
