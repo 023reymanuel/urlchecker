@@ -13,11 +13,17 @@ A  CLI tool to check the status, response time, and content of URLs. Useful for 
 ```bash
 go install github.com/<your-username>/urlcheck@latest
 
-# Check a single URL
-urlcheck check https://example.com
+## Usage
 
-# Check with a keyword
-urlcheck check https://example.com --keyword "Example Domain"
+Run `urlcheck --help` to see available commands and options.
 
-# Check URLs from a file and save to CSV
-urlcheck list urls.txt --output results.csv
+**Commands**:
+- `urlcheck check <url>`: Check a single URL for status and response time.
+  - `--keyword`, `-k`: Search for a keyword in the page content (case-insensitive).
+- `urlcheck list <file>`: Check multiple URLs from a file (one URL per line).
+  - `--keyword`, `-k`: Search for a keyword in all pages.
+  - `--output`, `-o`: Save results to a file (CSV or JSON based on --format).
+
+**Syntax**:
+```bash
+urlcheck [command] [arguments] [flags]
