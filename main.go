@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -24,26 +26,65 @@ type URLResult struct {
 
 // URLChecker manages URL checking operations
 type URLChecker struct {
-	client *http.Client
+	client  *http.Client
+	retries int
 }
 
-// NewURLChecker initializes a URLChecker with a timeout
-func NewURLChecker(timeout time.Duration) *URLChecker {
+// NewURLChecker initializes a URLChecker with a timeout and retry count
+func NewURLChecker(timeout time.Duration, retries int) *URLChecker {
 	return &URLChecker{
 		client: &http.Client{
 			Timeout: timeout,
 		},
+		retries: retries,
 	}
 }
 
+// validateURL checks if a URL is well-formed
+func validateURL(rawURL string) error {
+	if rawURL == "" {
+		return fmt.Errorf("URL is empty")
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %v", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("URL must use http or https scheme")
+	}
+	if u.Host == "" {
+		return fmt.Errorf("URL must have a valid host")
+	}
+	return nil
+}
+
 // checkURL checks a single URL and optionally searches for a keyword
-func (c *URLChecker) checkURL(url, keyword string) URLResult {
-	result := URLResult{URL: url}
+func (c *URLChecker) checkURL(rawURL, keyword string) URLResult {
+	result := URLResult{URL: rawURL}
+
+	// Validate URL
+	if err := validateURL(rawURL); err != nil {
+		result.Error = err.Error()
+		return result
+	}
+
+	var resp *http.Response
+	var err error
 	start := time.Now()
 
-	resp, err := c.client.Get(url)
+	// Attempt request with retries
+	for attempt := 0; attempt <= c.retries; attempt++ {
+		resp, err = c.client.Get(rawURL)
+		if err == nil {
+			break
+		}
+		if attempt < c.retries {
+			time.Sleep(time.Duration(attempt+1) * 500 * time.Millisecond)
+		}
+	}
+
 	if err != nil {
-		result.Error = err.Error()
+		result.Error = fmt.Sprintf("failed after %d retries: %v", c.retries+1, err)
 		return result
 	}
 	defer resp.Body.Close()
@@ -54,7 +95,7 @@ func (c *URLChecker) checkURL(url, keyword string) URLResult {
 	if keyword != "" {
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
-			result.Error = fmt.Sprintf("Error reading body: %v", err)
+			result.Error = fmt.Sprintf("error reading body: %v", err)
 			return result
 		}
 		result.KeywordFound = strings.Contains(strings.ToLower(string(body)), strings.ToLower(keyword))
@@ -119,13 +160,48 @@ func writeCSV(results []URLResult, outputFile string) error {
 	return nil
 }
 
+// writeJSON writes results to a JSON file
+func writeJSON(results []URLResult, outputFile string) error {
+	data, err := json.MarshalIndent(results, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(outputFile, data, 0644)
+}
+
 func main() {
-	checker := NewURLChecker(10 * time.Second)
+	var timeoutSeconds int
+	var retries int
+	var outputFormat string
 
 	// Root command
 	var rootCmd = &cobra.Command{
 		Use:   "urlcheck",
 		Short: "A CLI tool to check URL status and content",
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			if timeoutSeconds <= 0 {
+				fmt.Println("Error: timeout must be positive")
+				os.Exit(1)
+			}
+			if retries < 0 {
+				fmt.Println("Error: retries cannot be negative")
+				os.Exit(1)
+			}
+			if outputFormat != "csv" && outputFormat != "json" {
+				fmt.Println("Error: output format must be 'csv' or 'json'")
+				os.Exit(1)
+			}
+		},
+	}
+	rootCmd.PersistentFlags().IntVar(&timeoutSeconds, "timeout", 10, "HTTP request timeout in seconds")
+	rootCmd.PersistentFlags().IntVar(&retries, "retries", 0, "Number of retries for failed requests")
+	rootCmd.PersistentFlags().StringVar(&outputFormat, "format", "csv", "Output format: csv or json")
+
+	// Initialize checker after flags are parsed
+	var checker *URLChecker
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		checker = NewURLChecker(time.Duration(timeoutSeconds)*time.Second, retries)
+		return nil
 	}
 
 	// Check command
@@ -158,8 +234,14 @@ func main() {
 				printResult(result)
 			}
 			if outputFile != "" {
-				if err := writeCSV(results, outputFile); err != nil {
-					fmt.Println("Error writing CSV:", err)
+				var err error
+				if outputFormat == "csv" {
+					err = writeCSV(results, outputFile)
+				} else {
+					err = writeJSON(results, outputFile)
+				}
+				if err != nil {
+					fmt.Println("Error writing output:", err)
 					return
 				}
 				fmt.Println("Results saved to", outputFile)
@@ -167,7 +249,7 @@ func main() {
 		},
 	}
 	listCmd.Flags().StringVarP(&keyword, "keyword", "k", "", "Keyword to search for in pages")
-	listCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output CSV file for results")
+	listCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file for results (CSV or JSON based on --format)")
 
 	// Add commands to root
 	rootCmd.AddCommand(checkCmd, listCmd)
